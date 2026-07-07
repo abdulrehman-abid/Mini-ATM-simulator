@@ -1,117 +1,229 @@
-""" ===========================================
-                   IMPORTS
-    ==========================================="""
+"""===========================================IMPORTS==========================================="""
+import json
+import os
+import sys
+import datetime
 
-from datetime import datetime
-now = datetime.now()
-now = now.strftime("%Y-%m-%d %H:%M:%S")
+"""===========================================DATABASE FILE MANAGER==========================================="""
+DB_FILE = "accounts_database.json"
 
-""" ===========================================
-                    DATA BASE
-    ==========================================="""
-
-Accounts_DB = {
-       "123456789": {
-           "account_holder": "John Doe",
-           "password": "0252"},
-       "123456780": {
-           "account_holder": "Jane Smith",
-           "password": "1234"},
-        "123456781": {
-           "account_holder": "Alice Johnson",
-           "password": "5678"}   }
-
-
-""" ==========================================
-          CLASS DEFINITION (THE ENGINE)
-    =========================================="""
-class BankAccount:
+def initialize_database():
+    """Initializes an empty database file on disk if it does not exist."""
+    if not os.path.exists(DB_FILE):
+        empty_template = {}  # Removed all hardcoded default accounts
+        with open(DB_FILE, "w") as file:
+            json.dump(empty_template, file, indent=4)
+        return empty_template
     
+    try:
+        with open(DB_FILE, "r") as file:
+            return json.load(file)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
+
+def save_database(data_dictionary):
+    """Guarantees modifications are locked directly onto disk sector."""
+    with open(DB_FILE, "w") as file:
+        json.dump(data_dictionary, file, indent=4)
+        file.flush()        # Clear internal python buffers
+        os.fsync(file.fileno())  # Force OS write directly to hard drive
+
+# Run database synchronization at program boot
+Accounts_DB = initialize_database()
+
+"""==========================================CLASS DEFINITION=========================================="""
+class BankAccount:
     def __init__(self, account_number, account_holder, balance):
-        # Using double underscores (__) to enforce data encapsulation (hides variables)
         self.__account_number = account_number
         self.__account_holder = account_holder
         self.__balance = balance
+        self.__balance_file = f"balance_{self.__account_number}.txt"
+        self.__history_file = f"history_{self.__account_number}.txt"
+
+    def _get_timestamp(self):
+        return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def deposit(self, amount):
         if amount > 0:
             self.__balance += amount
-            
-            # CONCEPTUAL FIX: Log successful deposits to your transaction history file
-            with open("transaction_history.txt", "a") as file:
-                file.write(f"[{now}] Deposited: ${amount:.2f} | Balance: ${self.__balance:.2f}\n")                
-            return f"Deposited {amount}. New balance is {self.__balance}."
-        else:
-            return "Deposit amount must be positive."
+            with open(self.__history_file, "a") as file:
+                file.write(f"[{self._get_timestamp()}] Deposited: ${amount:.2f} | Balance: ${self.__balance:.2f}\n")
+            return f"New Balance: ${self.__balance:.2f}"
+        return "Deposit amount must be positive."
 
     def withdraw(self, amount):
         if amount > 0 and amount <= self.__balance:
             self.__balance -= amount
-            
-            # CONCEPTUAL FIX: Log successful withdrawals to your transaction history file
-            with open("transaction_history.txt", "a") as file:
-                file.write(f"[{now}] Withdrew: ${amount:.2f} | Balance: ${self.__balance:.2f}\n")
-                
-            return f"Withdrew {amount}. New balance is {self.__balance}."
+            with open(self.__history_file, "a") as file:
+                file.write(f"[{self._get_timestamp()}] Withdrew: ${amount:.2f} | Balance: ${self.__balance:.2f}\n")
+            return f"New Balance: ${self.__balance:.2f}"
         elif amount > self.__balance:
             return "Insufficient funds."
-        else:
-            return "Withdrawal amount must be positive."
+        return "Withdrawal amount must be positive."
 
-    # Getter method to securely read the private balance
     def get_balance(self):
-        return f"Current balance is {self.__balance}."
+        return self.__balance
 
-    # Getter method to securely read the private account number
     def get_account_number(self):
         return self.__account_number
 
-    # Getter method to securely read the private account holder name
     def get_account_holder(self):
         return self.__account_holder
 
-    # Getter method to display all account information
     def get_account_info(self):
         return {
             "Account Number": self.get_account_number(),
             "Account Holder": self.get_account_holder(),
-            "Balance": self.get_balance() 
-            }
-"""============================================
-          INITIAL ACCOUNT BALANCE LOADING      
-   ============================================"""
-# Load the initial account balance from file if available
-try:
-    with open("account balance.txt", "r") as file:
-        last_word = file.read().strip().split()[-1]
-    initial_balance = float(last_word.replace("$", ""))
-except (FileNotFoundError, ValueError):
-    initial_balance = 0.0
+            "Balance": f"${self.get_balance():.2f}"
+        }
 
-""" ==========================================
-          DRIVER CODE / USER INTERFACE
-    =========================================="""
+    def get_history_file(self):
+        return self.__history_file
 
-# Prompt the user for their account number
-account_number = input("Please enter your account number: ")
+    def save_balance_to_disk(self):
+        with open(self.__balance_file, "w") as file:
+            file.write(f"Final Balance: ${self.__balance:.2f}\n")
 
-# Check if the account exists in the database
-if account_number in Accounts_DB:
-    user_account = BankAccount(
-        account_number=account_number,
-        account_holder=Accounts_DB[account_number]["account_holder"],
-        balance=initial_balance)
-else:
-    print("Account not found.")
-    exit()
+    def update_database_password(self, target_database, new_password):
+        """Modifies password in runtime dict and flushes it straight to disk json."""
+        target_database[self.__account_number]["password"] = new_password
+        save_database(target_database)
 
+"""==========================================MENU CHOICE FUNCTIONS=========================================="""
+def handle_deposit(account):
+    try:
+        amount = float(input("Enter amount to deposit: "))
+        print(account.deposit(amount))
+    except ValueError:
+        print("Invalid input. Please enter a valid number.")
 
-password = Accounts_DB[user_account.get_account_number()]["password"]
+def handle_withdrawal(account):
+    try:
+        amount = float(input("Enter amount to withdraw: "))
+        print(account.withdraw(amount))
+    except ValueError:
+        print("Invalid input. Please enter a valid number.")
 
-# Security check before entering the banking loop
-introduced_password = input("Please enter your password to access the Micro ATM: ")
+def handle_check_balance(account):
+    print(f"Current Balance: ${account.get_balance():.2f}")
 
-if introduced_password == password:
+def handle_mini_statement(account):
+    try:
+        with open(account.get_history_file(), "r") as file:
+            transactions = file.readlines()
+            if transactions:
+                print("\nMini Statement:")
+                for transaction in transactions[-5:]:
+                    print(transaction.strip())
+            else:
+                print("No transactions found.")
+    except FileNotFoundError:
+        print("No transaction history available.")
+
+def handle_account_info(account):
+    print("\n=== ACCOUNT PROFILE ===")
+    info = account.get_account_info()
+    for key, value in info.items():
+        print(f"{key}: {value}")
+
+def handle_change_password(account, database):
+    print("\n=== CHANGE PASSWORD ===")
+    old_password_input = input("Enter your old password: ")
+    current_password = database[account.get_account_number()]["password"]
+    
+    if old_password_input == current_password:
+        new_password = input("Enter your new password: ")
+        confirm_password = input("Confirm your new password: ")
+        if new_password == confirm_password:
+            if len(new_password) >= 4:
+                account.update_database_password(database, new_password)
+                print("Password changed successfully and locked onto disk JSON!")
+            else:
+                print("Password change failed. Password must be at least 4 characters.")
+        else:
+            print("Password change failed. New passwords do not match.")
+    else:
+        print("Incorrect old password. Action denied.")
+
+def handle_register_account(database):
+    print("\n=== CREATE NEW ACCOUNT ===")
+    new_acc_num = input("Create a unique account number: ").strip()
+    
+    if new_acc_num in database:
+        print("Registration failed. This account number is already taken.")
+        return
+    if not new_acc_num.isdigit() or len(new_acc_num) < 4:
+        print("Registration failed. Account number must be numbers only (at least 4 digits).")
+        return
+        
+    new_holder = input("Enter your full name: ").strip()
+    if not new_holder:
+        print("Registration failed. Name cannot be blank.")
+        return
+        
+    new_pin = input("Create a 4-digit password: ").strip()
+    if len(new_pin) < 4:
+        print("Registration failed. Password must be at least 4 characters.")
+        return
+        
+    # Inject into tracking dict and save straight to disk file
+    database[new_acc_num] = {"account_holder": new_holder, "password": new_pin}
+    save_database(database)
+    print(f"Success! Account for {new_holder} created and written to file registry.\n")
+
+"""==========================================DRIVER CODE / UI=========================================="""
+user_account = None
+
+while True:
+    print("=== MICRO ATM GATEWAY ===")
+    print("1. Login to Existing Account")
+    print("2. Register New Account")
+    print("3. Exit System")
+    gateway_choice = input("Select an option (1-3): ")
+    
+    if gateway_choice == '1':
+        account_number = input("Please enter your account number: ")
+        
+        if account_number in Accounts_DB:
+            user_balance_file = f"balance_{account_number}.txt"
+            try:
+                with open(user_balance_file, "r") as file:
+                    content = file.read().strip()
+                    if content:
+                        last_word = content.split()[-1]
+                        initial_balance = float(last_word.replace("$", ""))
+                    else:
+                        initial_balance = 0.0
+            except (FileNotFoundError, ValueError, IndexError):
+                initial_balance = 0.0
+                
+            password = Accounts_DB[account_number]["password"]
+            introduced_password = input("Please enter your password to access the Micro ATM: ")
+            
+            if introduced_password == password:
+                user_account = BankAccount(
+                    account_number=account_number,
+                    account_holder=Accounts_DB[account_number]["account_holder"],
+                    balance=initial_balance
+                )
+                print("Access Granted!")
+                break
+            else:
+                print("Incorrect password. Access denied.\n")
+                user_account = None
+        else:
+            print("Account not found.\n")
+            
+    elif gateway_choice == '2':
+        handle_register_account(Accounts_DB)
+        
+    elif gateway_choice == '3':
+        print("System shutdown. Goodbye!")
+        sys.exit()
+    else:
+        print("Invalid choice. Please select 1, 2, or 3.\n")
+
+if user_account is not None:
     while True:
         print("\nWelcome to the Micro ATM Simulator")
         print("1. Deposit")
@@ -119,64 +231,25 @@ if introduced_password == password:
         print("3. Check Balance")
         print("4. Give Mini Statement")
         print("5. Account Info")
-        print("6. Exit")
-
-        choice = input("Please select an option (1-6): ")
-
-        if choice == '1':
-            try:
-                # Wrap inputs in float parsing and look for value anomalies
-                amount = float(input("Enter amount to deposit: "))
-                print(user_account.deposit(amount))
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
-                
-        elif choice == '2':
-            try:
-                amount = float(input("Enter amount to withdraw: "))
-                print(user_account.withdraw(amount))
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
-                
-        elif choice == '3':
-            print(user_account.get_balance())
-            
-        elif choice == '4':
-            try:
-                with open("transaction_history.txt", "r") as file:
-                    transactions = file.readlines()
-                    if transactions:
-                        print("\nMini Statement:")
-                        for transaction in transactions[-5:]:  # Show last 5 transactions
-                            print(transaction.strip())
-                    else:
-                        print("No transactions found.")
-            except FileNotFoundError:
-                print("No transaction history available.") 
-        # Down in your driver code menu options:
-        elif choice == '5':
-
-            print("\n=== ACCOUNT PROFILE ===")
-            # Get the dictionary from your class method
-            info = user_account.get_account_info()
-    
-            # Loop through each key and value to print them line by line
-            for key, value in info.items():
-                print(f"{key}: {value}")
-
-        elif choice == '6':
-            print(f"Thank you {user_account.get_account_holder()} for using the Micro ATM Simulator. Goodbye!")
-            
-            with open("account balance.txt", "w") as file:
-                clean_balance = user_account.get_balance().split()[-1].rstrip(".")
-                file.write(f"Final Balance: ${clean_balance}\n")
-            
-            break # Gracefully ends the while loop execution
-            
-       
-        else:
-            print("Invalid option. Please try again.")
+        print("6. Change Password")
+        print("7. Exit")
+        choice = input("Please select an option (1-7): ")
         
-
-else:
-    print("Incorrect password. Access denied.")
+        if choice == '1':
+            handle_deposit(user_account)
+        elif choice == '2':
+            handle_withdrawal(user_account)
+        elif choice == '3':
+            handle_check_balance(user_account)
+        elif choice == '4':
+            handle_mini_statement(user_account)
+        elif choice == '5':
+            handle_account_info(user_account)
+        elif choice == '6':
+            handle_change_password(user_account, Accounts_DB)
+        elif choice == '7':
+            user_account.save_balance_to_disk()
+            print(f"Thank you {user_account.get_account_holder()} for using the Micro ATM Simulator. Goodbye!")
+            break
+        else:
+            print("Invalid choice. Please select a number between 1 and 7.")
